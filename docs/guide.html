@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>快速开始 — SVS Mock</title>
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="navbar">
+  <div class="nav-inner">
+    <a class="nav-brand" href="index.html">✍️ SVS Mock</a>
+    <ul class="nav-links">
+      <li><a href="index.html">首页</a></li>
+      <li><a href="guide.html" class="active">快速开始</a></li>
+      <li><a href="api.html">接口文档</a></li>
+      <li><a href="config.html">配置说明</a></li>
+      <li><a href="https://github.com/kintaiW/0029-svs-mock/releases" target="_blank">下载 ↗</a></li>
+    </ul>
+  </div>
+</nav>
+
+<div class="doc-layout">
+  <aside class="sidebar">
+    <ul>
+      <li><a href="#download">下载预编译程序</a></li>
+      <li><a href="#deploy">部署运行</a></li>
+      <li><a href="#test">验证服务</a></li>
+      <li><a href="#build">源码编译</a></li>
+      <li><a href="#gen-cert">生成测试证书</a></li>
+      <li><a href="#env-var">环境变量</a></li>
+      <li><a href="#systemd">systemd 服务</a></li>
+    </ul>
+  </aside>
+
+  <main class="doc-main">
+    <h1>快速开始</h1>
+
+    <h2 id="download">下载预编译程序</h2>
+    <p>前往 <a href="https://github.com/kintaiW/0029-svs-mock/releases" target="_blank">GitHub Releases</a> 下载对应平台的发布包：</p>
+    <pre><code>svs-mock-v0.1.0-linux-x86_64.tar.gz
+  ├── svs-mock              # 可执行文件（单文件，无运行时依赖）
+  ├── mock_certs.toml       # 示例配置（含测试证书和密钥）
+  ├── examples/
+  │   └── gen_test_data.rs  # 证书/密钥生成工具源码
+  └── README.md</code></pre>
+
+    <h2 id="deploy">部署运行</h2>
+    <pre><code><span class="cm"># 1. 解压</span>
+tar -xzf svs-mock-v0.1.0-linux-x86_64.tar.gz
+cd svs-mock-v0.1.0-linux-x86_64
+
+<span class="cm"># 2. 确保 mock_certs.toml 在当前目录（或用环境变量指定）</span>
+ls mock_certs.toml
+
+<span class="cm"># 3. 直接运行（默认监听 0.0.0.0:9000）</span>
+./svs-mock
+
+<span class="cm"># 或：指定配置文件路径</span>
+SVS_MOCK_CONFIG=/etc/svs/mock_certs.toml ./svs-mock
+
+<span class="cm"># 后台运行</span>
+nohup ./svs-mock &gt; svs-mock.log 2&gt;&amp;1 &amp;</code></pre>
+
+    <div class="callout callout-info">
+      <strong>公网部署</strong>：服务默认监听 <code>0.0.0.0:9000</code>，可直接通过 IP:9000 从外网访问。如需修改端口，编辑 <code>mock_certs.toml</code> 中的 <code>[server] port</code> 字段。建议配合 Nginx 反向代理或防火墙策略使用。
+    </div>
+
+    <h2 id="test">验证服务</h2>
+    <p>服务启动后，用 curl 快速验证：</p>
+    <pre><code><span class="cm"># SM3 摘要（最简单的测试）</span>
+curl -s -X POST http://localhost:9000/Digest \
+  -H "Content-Type: application/json" \
+  -d '{"inData":"aGVsbG8="}' | python3 -m json.tool
+
+<span class="cm"># 预期返回：</span>
+<span class="cm"># {</span>
+<span class="cm">#   "respValue": 0,</span>
+<span class="cm">#   "hashData": "..."   (base64 编码的 SM3 摘要)</span>
+<span class="cm"># }</span>
+
+<span class="cm"># SM2 签名（需要配置 signing_keys）</span>
+curl -s -X POST http://localhost:9000/SignData \
+  -H "Content-Type: application/json" \
+  -d '{"keyIndex":1,"password":"12345678","inData":"aGVsbG8="}' | python3 -m json.tool
+
+<span class="cm"># 证书导出</span>
+curl -s -X POST http://localhost:9000/ExportCert \
+  -H "Content-Type: application/json" \
+  -d '{"certSN":"01"}' | python3 -m json.tool</code></pre>
+
+    <h2 id="build">源码编译</h2>
+    <pre><code><span class="cm"># 环境要求：Rust 1.75+</span>
+git clone https://github.com/kintaiW/0029-svs-mock.git
+cd 0029-svs-mock
+
+<span class="cm"># 编译（release 模式，优化体积和性能）</span>
+cargo build --release
+<span class="cm"># 输出：target/release/svs-mock</span>
+
+<span class="cm"># 运行</span>
+cargo run --release</code></pre>
+
+    <h2 id="gen-cert">生成测试证书</h2>
+    <p>项目包含证书生成工具，可生成适用于 <code>mock_certs.toml</code> 的测试证书和密钥：</p>
+    <pre><code><span class="cm"># 生成测试数据（SM2 密钥对 + 自签名证书）</span>
+cargo run --example gen_test_data
+
+<span class="cm"># 输出的密钥和证书可直接填入 mock_certs.toml</span></code></pre>
+
+    <h2 id="env-var">环境变量</h2>
+    <table>
+      <tr><th>变量</th><th>说明</th><th>默认值</th></tr>
+      <tr><td><code>SVS_MOCK_CONFIG</code></td><td>指定配置文件路径</td><td><code>./mock_certs.toml</code></td></tr>
+      <tr><td><code>RUST_LOG</code></td><td>日志级别</td><td><code>info</code>（在 mock_certs.toml 中配置）</td></tr>
+    </table>
+
+    <h2 id="systemd">systemd 服务（可选）</h2>
+    <p>在 Linux 服务器上可配置为 systemd 服务实现开机自启：</p>
+    <pre><code><span class="cm"># /etc/systemd/system/svs-mock.service</span>
+[Unit]
+Description=SVS Mock Server (GM/T 0029-2014)
+After=network.target
+
+[Service]
+Type=simple
+User=svs
+WorkingDirectory=/opt/svs-mock
+ExecStart=/opt/svs-mock/svs-mock
+Environment=SVS_MOCK_CONFIG=/opt/svs-mock/mock_certs.toml
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target</code></pre>
+    <pre><code><span class="cm"># 启用服务</span>
+sudo systemctl daemon-reload
+sudo systemctl enable svs-mock
+sudo systemctl start svs-mock
+sudo systemctl status svs-mock</code></pre>
+
+  </main>
+</div>
+
+<footer class="footer">
+  <div class="container">
+    <p>SVS Mock · 基于 <a href="https://crates.io/crates/libsmx">libsmx</a> + <a href="https://crates.io/crates/axum">axum</a> · GM/T 0029-2014</p>
+  </div>
+</footer>
+
+</body>
+</html>

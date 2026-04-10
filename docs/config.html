@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>配置说明 — SVS Mock</title>
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="navbar">
+  <div class="nav-inner">
+    <a class="nav-brand" href="index.html">✍️ SVS Mock</a>
+    <ul class="nav-links">
+      <li><a href="index.html">首页</a></li>
+      <li><a href="guide.html">快速开始</a></li>
+      <li><a href="api.html">接口文档</a></li>
+      <li><a href="config.html" class="active">配置说明</a></li>
+      <li><a href="https://github.com/kintaiW/0029-svs-mock/releases" target="_blank">下载 ↗</a></li>
+    </ul>
+  </div>
+</nav>
+
+<div class="doc-layout">
+  <aside class="sidebar">
+    <ul>
+      <li><a href="#overview">概述</a></li>
+      <li><a href="#search-order">查找顺序</a></li>
+      <li><a href="#server">[server] 服务配置</a></li>
+      <li><a href="#trusted-roots">[[trusted_roots]] 信任根</a></li>
+      <li><a href="#signing-keys">[[signing_keys]] 签名密钥</a></li>
+      <li><a href="#enc-keys">[[enc_keys]] 加密密钥</a></li>
+      <li><a href="#full-example">完整示例</a></li>
+      <li><a href="#gen-cert">生成测试证书</a></li>
+    </ul>
+  </aside>
+
+  <main class="doc-main">
+    <h1>配置说明</h1>
+
+    <h2 id="overview">概述</h2>
+    <p>svs-mock 通过 <code>mock_certs.toml</code> 配置服务端口、日志级别、信任根证书、签名密钥和加密密钥。服务启动时自动加载此配置，构建内存中的证书仓库。</p>
+
+    <h2 id="search-order">查找顺序</h2>
+    <table>
+      <thead>
+        <tr><th>优先级</th><th>方式</th><th>说明</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>1</td><td>环境变量 <code>SVS_MOCK_CONFIG</code></td><td>指定配置文件绝对路径</td></tr>
+        <tr><td>2</td><td>当前工作目录 <code>./mock_certs.toml</code></td><td>启动进程时 shell 的 <code>pwd</code></td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="server">[server] 服务配置</h2>
+    <pre><code>[server]
+port      = 9000     <span class="cm"># HTTP 监听端口（默认 9000）</span>
+log_level = "info"   <span class="cm"># 日志级别：debug / info / warn / error</span></code></pre>
+
+    <h2 id="trusted-roots">[[trusted_roots]] 信任根证书</h2>
+    <p>配置信任的根证书，用于 <code>ValidateCert</code> 验证证书链和 <code>ExportCert</code> 导出证书。</p>
+    <pre><code>[[trusted_roots]]
+name = "测试根 CA"              <span class="cm"># 名称（仅用于日志标识）</span>
+cert = "MIIBxTCCAWu..."        <span class="cm"># DER 格式证书的 base64 编码</span></code></pre>
+    <div class="callout callout-info">
+      可配置多个 <code>[[trusted_roots]]</code>。证书加载后同时建立 subject 和 serialNumber 两个索引，供 <code>ExportCert</code> 的 <code>certSubjectBase64</code> 和 <code>certSN</code> 两种查询方式使用。
+    </div>
+
+    <h2 id="signing-keys">[[signing_keys]] 签名密钥</h2>
+    <p>配置 SM2 签名密钥对，供 <code>SignData</code> 和 <code>SignMessage</code> 接口使用。</p>
+    <pre><code>[[signing_keys]]
+index       = 1                       <span class="cm"># 密钥索引（对应请求中的 keyIndex）</span>
+pin         = "12345678"              <span class="cm"># 密钥 PIN（对应请求中的 password）</span>
+private_key = "cc54df...（64位hex）"  <span class="cm"># SM2 私钥（32字节 hex）</span>
+cert        = "MIIBxTCCAWu..."       <span class="cm"># 签名证书 DER base64</span></code></pre>
+    <div class="callout callout-warn">
+      <strong>PIN 验证</strong>：<code>SignData</code> 和 <code>SignMessage</code> 请求中的 <code>password</code> 必须与配置中的 <code>pin</code> 完全匹配，否则返回 <code>ERR_KEY_AUTH (0x04000006)</code>。
+    </div>
+
+    <h2 id="enc-keys">[[enc_keys]] 加密密钥</h2>
+    <p>配置 SM2 加密密钥对，供 <code>envelopeDec</code> 接口使用。</p>
+    <pre><code>[[enc_keys]]
+index       = 1                       <span class="cm"># 密钥索引（对应请求中的 keyIndex）</span>
+private_key = "aa11bb...（64位hex）"  <span class="cm"># SM2 加密私钥（32字节 hex）</span>
+cert        = "MIIBxTCCAWu..."       <span class="cm"># 加密证书 DER base64</span></code></pre>
+
+    <h2 id="full-example">完整示例</h2>
+    <pre><code><span class="cm"># mock_certs.toml — 完整配置示例</span>
+
+[server]
+port      = 9000
+log_level = "info"
+
+<span class="cm"># ─── 信任根证书（可配多个）───</span>
+[[trusted_roots]]
+name = "测试根 CA"
+cert = """
+MIIBxTCCAWugAwIBAgIBATAKBggqgRzPVQGDdTBEMQswCQYDVQQGEwJDTjEQMA4G
+A1UECAwHQmVpamluZzEQMA4GA1UEBwwHQmVpamluZzERMA8GA1UECgwITW9ja0NB
+...
+"""
+
+<span class="cm"># ─── 签名密钥（可配多个，按 index 区分）───</span>
+[[signing_keys]]
+index = 1
+pin = "12345678"
+private_key = "cc54df687d98e2cac86786f469f04c69b280f19a0eccf8bdf15bfeab778cada0"
+cert = """
+MIIBxTCCAWugAwIBAgIBATAKBggqgRzPVQGDdTBEMQswCQYDVQQGEwJDTjEQMA4G
+...
+"""
+
+[[signing_keys]]
+index = 2
+pin = "87654321"
+private_key = "..."
+cert = "..."
+
+<span class="cm"># ─── 加密密钥（可配多个，按 index 区分）───</span>
+[[enc_keys]]
+index = 1
+private_key = "aa11bb22cc33dd44ee55ff66001122334455667788990011223344556677aabb"
+cert = """
+MIIBxTCCAWugAwIBAgIBATAKBggqgRzPVQGDdTBEMQswCQYDVQQGEwJDTjEQMA4G
+...
+"""</code></pre>
+
+    <h2 id="gen-cert">生成测试证书</h2>
+    <p>项目提供证书生成工具，可生成符合要求的 SM2 自签名证书和密钥：</p>
+    <pre><code><span class="cm"># 从源码运行证书生成工具</span>
+cd 0029-svs-mock
+cargo run --example gen_test_data
+
+<span class="cm"># 输出 SM2 密钥对（hex）和自签名证书（DER base64）</span>
+<span class="cm"># 将输出内容填入 mock_certs.toml 对应字段即可</span></code></pre>
+
+    <div class="callout callout-warn">
+      <strong>⚠️ 安全警告</strong>：配置文件中的私钥和证书仅用于开发测试。<strong>严禁在生产环境使用示例密钥</strong>。如需部署到公网，请使用自行生成的测试密钥，或配合组织的 CA 签发正式证书。
+    </div>
+
+  </main>
+</div>
+
+<footer class="footer">
+  <div class="container">
+    <p>SVS Mock · 基于 <a href="https://crates.io/crates/libsmx">libsmx</a> + <a href="https://crates.io/crates/axum">axum</a> · GM/T 0029-2014</p>
+  </div>
+</footer>
+
+</body>
+</html>

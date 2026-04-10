@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SVS Mock — GM/T 0029-2014 签名验签服务器模拟</title>
+  <link rel="stylesheet" href="assets/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✍️</text></svg>">
+</head>
+<body>
+
+<nav class="navbar">
+  <div class="nav-inner">
+    <a class="nav-brand" href="index.html">✍️ SVS Mock</a>
+    <ul class="nav-links">
+      <li><a href="index.html" class="active">首页</a></li>
+      <li><a href="guide.html">快速开始</a></li>
+      <li><a href="api.html">接口文档</a></li>
+      <li><a href="config.html">配置说明</a></li>
+      <li><a href="https://github.com/kintaiW/0029-svs-mock/releases" target="_blank">下载 ↗</a></li>
+    </ul>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="hero-inner">
+    <div class="badge">GM/T 0029-2014</div>
+    <h1>SVS Mock</h1>
+    <p class="hero-sub">无需真实签名验签服务器，一个可执行文件即可部署标准 SVS HTTP 接口<br>纯 Rust 实现 · JSON over HTTP · 国密证书全流程支持</p>
+    <div class="hero-btns">
+      <a href="https://github.com/kintaiW/0029-svs-mock/releases" class="btn btn-primary" target="_blank">⬇ 下载可执行文件</a>
+      <a href="guide.html" class="btn btn-outline">快速开始</a>
+    </div>
+    <div class="hero-badges">
+      <span class="tag">SM2</span>
+      <span class="tag">SM3</span>
+      <span class="tag">SM4</span>
+      <span class="tag">X.509</span>
+      <span class="tag">CMS</span>
+      <span class="tag">HTTP API</span>
+    </div>
+  </div>
+</header>
+
+<!-- 特性卡片 -->
+<section class="section">
+  <div class="container">
+    <h2 class="section-title">核心特性</h2>
+    <div class="cards">
+
+      <div class="card">
+        <div class="card-icon">📋</div>
+        <h3>完整 SVS 接口</h3>
+        <p>覆盖 GM/T 0029-2014 标准的证书管理、数字签名、签名验证、数字信封、SM3 摘要等 22 个 HTTP 接口。</p>
+      </div>
+
+      <div class="card">
+        <div class="card-icon">🌐</div>
+        <h3>HTTP JSON API</h3>
+        <p>标准 JSON POST 接口，与纽创信安 XC-M30W 等真实设备接口协议兼容，URL 路径和字段名完全一致。</p>
+      </div>
+
+      <div class="card">
+        <div class="card-icon">📜</div>
+        <h3>国密证书全流程</h3>
+        <p>证书导出/验证/解析 · SM2 数字签名/验签 · PKCS7/CMS SignedData · SM2+SM4 数字信封加解密。</p>
+      </div>
+
+      <div class="card">
+        <div class="card-icon">🚀</div>
+        <h3>开箱即部署</h3>
+        <p>单个可执行文件 + 一个 TOML 配置文件，无需安装运行时依赖。下载解压即可部署到公网或内网环境。</p>
+      </div>
+
+      <div class="card">
+        <div class="card-icon">⚙️</div>
+        <h3>灵活配置</h3>
+        <p>通过 <code>mock_certs.toml</code> 配置服务端口、信任根证书、签名密钥、加密密钥，支持多密钥索引。</p>
+      </div>
+
+      <div class="card">
+        <div class="card-icon">🔑</div>
+        <h3>国密算法全覆盖</h3>
+        <p>SM2 签名/加密 · SM3 摘要（含 Z 值预计算）· SM4-CBC 数字信封 · 手工 CMS DER 编码，基于 libsmx 纯软件实现。</p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- 调用流程 -->
+<section class="section section-gray">
+  <div class="container">
+    <h2 class="section-title">典型调用流程</h2>
+    <p class="section-sub">所有接口均为 JSON POST，请求/响应字段与真实设备一致</p>
+    <div class="flow">
+      <div class="flow-step">
+        <div class="flow-num">1</div>
+        <div class="flow-label">部署服务</div>
+        <div class="flow-desc">下载可执行文件<br>配置 mock_certs.toml<br>启动服务</div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step">
+        <div class="flow-num">2</div>
+        <div class="flow-label">证书操作</div>
+        <div class="flow-desc">ExportCert<br>ValidateCert<br>ParseCert</div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step">
+        <div class="flow-num">3</div>
+        <div class="flow-label">签名/验签</div>
+        <div class="flow-desc">SignData (P1)<br>VerifySignedData<br>SignMessage (CMS)</div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step">
+        <div class="flow-num">4</div>
+        <div class="flow-label">数字信封</div>
+        <div class="flow-desc">envelopeEnc<br>envelopeDec</div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step">
+        <div class="flow-num">5</div>
+        <div class="flow-label">摘要运算</div>
+        <div class="flow-desc">Digest (SM3)<br>含 Z 值预计算</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 代码示例 -->
+<section class="section">
+  <div class="container">
+    <h2 class="section-title">接口调用示例</h2>
+    <div class="code-tabs">
+      <div class="tab-bar">
+        <button class="tab-btn active" onclick="showTab('curl')">curl</button>
+        <button class="tab-btn" onclick="showTab('python')">Python</button>
+      </div>
+      <div id="tab-curl" class="tab-content">
+<pre><code><span class="cm"># SM3 摘要</span>
+curl -X POST http://localhost:9000/Digest \
+  -H <span class="str">"Content-Type: application/json"</span> \
+  -d <span class="str">'{"inData":"aGVsbG8="}'</span>
+
+<span class="cm"># SM2 签名（keyIndex=1，需配置 mock_certs.toml）</span>
+curl -X POST http://localhost:9000/SignData \
+  -H <span class="str">"Content-Type: application/json"</span> \
+  -d <span class="str">'{"keyIndex":1,"password":"12345678","inData":"aGVsbG8="}'</span>
+
+<span class="cm"># 验证签名</span>
+curl -X POST http://localhost:9000/VerifySignedData \
+  -H <span class="str">"Content-Type: application/json"</span> \
+  -d <span class="str">'{"certBase64":"...","inData":"aGVsbG8=","signData":"..."}'</span>
+
+<span class="cm"># 数字信封加密</span>
+curl -X POST http://localhost:9000/envelopeEnc \
+  -H <span class="str">"Content-Type: application/json"</span> \
+  -d <span class="str">'{"certBase64":"...","inData":"aGVsbG8="}'</span></code></pre>
+      </div>
+      <div id="tab-python" class="tab-content" style="display:none">
+<pre><code><span class="kw">import</span> requests, base64, json
+
+SVS_URL = <span class="str">"http://localhost:9000"</span>
+
+<span class="cm"># SM3 摘要</span>
+resp = requests.post(f<span class="str">"{SVS_URL}/Digest"</span>, json={
+    <span class="str">"inData"</span>: base64.b64encode(b<span class="str">"hello"</span>).decode()
+})
+<span class="kw">print</span>(<span class="str">"digest ="</span>, resp.json()[<span class="str">"hashData"</span>])
+
+<span class="cm"># SM2 签名</span>
+resp = requests.post(f<span class="str">"{SVS_URL}/SignData"</span>, json={
+    <span class="str">"keyIndex"</span>: <span class="num">1</span>,
+    <span class="str">"password"</span>: <span class="str">"12345678"</span>,
+    <span class="str">"inData"</span>: base64.b64encode(b<span class="str">"hello"</span>).decode()
+})
+sig = resp.json()
+<span class="kw">print</span>(<span class="str">"signData ="</span>, sig[<span class="str">"signData"</span>])
+
+<span class="cm"># 验证签名</span>
+resp = requests.post(f<span class="str">"{SVS_URL}/VerifySignedData"</span>, json={
+    <span class="str">"certBase64"</span>: sig[<span class="str">"certBase64"</span>],
+    <span class="str">"inData"</span>: base64.b64encode(b<span class="str">"hello"</span>).decode(),
+    <span class="str">"signData"</span>: sig[<span class="str">"signData"</span>]
+})
+<span class="kw">print</span>(<span class="str">"verify ="</span>, resp.json()[<span class="str">"respValue"</span>])  <span class="cm"># 0 = 成功</span></code></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 接口矩阵 -->
+<section class="section section-gray">
+  <div class="container">
+    <h2 class="section-title">接口支持矩阵</h2>
+    <table class="alg-table">
+      <thead>
+        <tr><th>分类</th><th>接口</th><th>方法</th><th>状态</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>证书</td><td>ExportCert / ValidateCert / ParseCert</td><td>POST</td><td><span class="status ok">✓ 支持</span></td></tr>
+        <tr><td>摘要</td><td>Digest (SM3)</td><td>POST</td><td><span class="status ok">✓ 支持</span></td></tr>
+        <tr><td>数字信封</td><td>envelopeEnc / envelopeDec</td><td>POST</td><td><span class="status ok">✓ 支持</span></td></tr>
+        <tr><td>签名</td><td>SignData (P1) / SignMessage (CMS)</td><td>POST</td><td><span class="status ok">✓ 支持</span></td></tr>
+        <tr><td>验签</td><td>VerifySignedData / VerifySignedMessage</td><td>POST</td><td><span class="status ok">✓ 支持</span></td></tr>
+        <tr><td>多包签名</td><td>SignDataInit/Update/Final</td><td>POST</td><td><span class="status wip">⚠ Stub</span></td></tr>
+        <tr><td>多包验签</td><td>VerifySignedDataInit/Update/Final</td><td>POST</td><td><span class="status wip">⚠ Stub</span></td></tr>
+        <tr><td>多包消息签名</td><td>SignMessageInit/Update/Final</td><td>POST</td><td><span class="status wip">⚠ Stub</span></td></tr>
+        <tr><td>多包消息验签</td><td>VerifySignedMessageInit/Update/Final</td><td>POST</td><td><span class="status wip">⚠ Stub</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<footer class="footer">
+  <div class="container">
+    <p>SVS Mock · 基于 <a href="https://crates.io/crates/libsmx">libsmx</a> + <a href="https://crates.io/crates/axum">axum</a> · GM/T 0029-2014</p>
+    <p class="footer-sub">仅供开发测试，示例密钥和证书请勿用于生产环境</p>
+  </div>
+</footer>
+
+<script>
+function showTab(name) {
+  document.querySelectorAll('.tab-content').forEach(el => el.style.display = 'none');
+  document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+  document.getElementById('tab-' + name).style.display = 'block';
+  event.target.classList.add('active');
+}
+</script>
+</body>
+</html>

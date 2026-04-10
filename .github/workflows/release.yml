@@ -1,0 +1,133 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    # Reason: 固定 ubuntu-20.04 确保产物兼容 glibc 2.31+（Ubuntu 20.04 / CentOS 8 / Debian 11）
+    runs-on: ubuntu-20.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Smoke test — binary starts and responds
+        run: |
+          # Reason: 启动服务后用 curl 验证 /Digest 接口能正常响应，确保编译产物可用
+          ./target/release/svs-mock &
+          SVS_PID=$!
+          sleep 2
+
+          RESP=$(curl -s -X POST http://localhost:9000/Digest \
+            -H "Content-Type: application/json" \
+            -d '{"inData":"aGVsbG8="}')
+          echo "Digest response: $RESP"
+
+          # 检查 respValue == 0
+          echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['respValue']==0, f'Expected 0, got {d[\"respValue\"]}'"
+          echo "Smoke test PASSED"
+
+          kill $SVS_PID 2>/dev/null || true
+
+      - name: Package release artifacts
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          PKG_NAME="svs-mock-${VERSION}-linux-x86_64"
+          mkdir -p "release/${PKG_NAME}/examples"
+
+          # 可执行文件
+          cp target/release/svs-mock "release/${PKG_NAME}/"
+
+          # 配置文件（部署必需）
+          cp mock_certs.toml "release/${PKG_NAME}/"
+
+          # 证书生成工具源码
+          cp -r examples/ "release/${PKG_NAME}/examples/" 2>/dev/null || true
+
+          # README
+          cp README.md "release/${PKG_NAME}/"
+
+          # 打包
+          cd release
+          tar -czf "${PKG_NAME}.tar.gz" "${PKG_NAME}"
+          ls -lh "${PKG_NAME}.tar.gz"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: release/*.tar.gz
+          generate_release_notes: true
+          body: |
+            ## SVS Mock ${{ github.ref_name }}
+
+            GM/T 0029-2014 签名验签服务器纯软件模拟，单个可执行文件即可部署。
+
+            ### 📦 下载说明
+
+            下载 `svs-mock-${{ github.ref_name }}-linux-x86_64.tar.gz` 后解压即可部署：
+
+            ```
+            svs-mock-${{ github.ref_name }}-linux-x86_64/
+            ├── svs-mock              # 可执行文件（无额外运行时依赖）
+            ├── mock_certs.toml       # 配置文件（含测试证书/密钥）
+            ├── examples/
+            │   └── gen_test_data.rs  # 证书/密钥生成工具源码
+            └── README.md
+            ```
+
+            ### 🚀 快速部署
+
+            ```bash
+            tar -xzf svs-mock-${{ github.ref_name }}-linux-x86_64.tar.gz
+            cd svs-mock-${{ github.ref_name }}-linux-x86_64
+
+            # 启动服务（默认监听 0.0.0.0:9000）
+            ./svs-mock
+
+            # 验证
+            curl -s -X POST http://localhost:9000/Digest \
+              -H "Content-Type: application/json" \
+              -d '{"inData":"aGVsbG8="}'
+            ```
+
+            ### 📡 支持的接口（22 个）
+
+            | 分类 | 接口 | 状态 |
+            |------|------|------|
+            | 证书 | ExportCert / ValidateCert / ParseCert | ✅ |
+            | 摘要 | Digest (SM3) | ✅ |
+            | 签名 | SignData / SignMessage | ✅ |
+            | 验签 | VerifySignedData / VerifySignedMessage | ✅ |
+            | 数字信封 | envelopeEnc / envelopeDec | ✅ |
+            | 多包接口 | Init/Update/Final (×4) | ⚠️ Stub |
+
+            **详细文档**：https://kintaiw.github.io/0029-svs-mock/
+
+            ### ⚠️ 注意事项
+
+            - 构建环境：Ubuntu 20.04（glibc 2.31+）
+            - 配置文件 `mock_certs.toml` 必须在工作目录下或通过 `SVS_MOCK_CONFIG` 指定
+            - 仅供开发测试，示例密钥和证书严禁用于生产环境

@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>接口文档 — SVS Mock</title>
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="navbar">
+  <div class="nav-inner">
+    <a class="nav-brand" href="index.html">✍️ SVS Mock</a>
+    <ul class="nav-links">
+      <li><a href="index.html">首页</a></li>
+      <li><a href="guide.html">快速开始</a></li>
+      <li><a href="api.html" class="active">接口文档</a></li>
+      <li><a href="config.html">配置说明</a></li>
+      <li><a href="https://github.com/kintaiW/0029-svs-mock/releases" target="_blank">下载 ↗</a></li>
+    </ul>
+  </div>
+</nav>
+
+<div class="doc-layout">
+  <aside class="sidebar">
+    <ul>
+      <li class="sidebar-group">通用说明</li>
+      <li><a href="#overview">接口概览</a></li>
+      <li><a href="#format">请求/响应格式</a></li>
+      <li class="sidebar-group">证书管理</li>
+      <li><a href="#export-cert">ExportCert</a></li>
+      <li><a href="#validate-cert">ValidateCert</a></li>
+      <li><a href="#parse-cert">ParseCert</a></li>
+      <li class="sidebar-group">摘要运算</li>
+      <li><a href="#digest">Digest</a></li>
+      <li class="sidebar-group">数字签名</li>
+      <li><a href="#sign-data">SignData</a></li>
+      <li><a href="#verify-signed-data">VerifySignedData</a></li>
+      <li><a href="#sign-message">SignMessage</a></li>
+      <li><a href="#verify-signed-message">VerifySignedMessage</a></li>
+      <li class="sidebar-group">数字信封</li>
+      <li><a href="#envelope-enc">envelopeEnc</a></li>
+      <li><a href="#envelope-dec">envelopeDec</a></li>
+      <li class="sidebar-group">错误码</li>
+      <li><a href="#error-codes">错误码列表</a></li>
+    </ul>
+  </aside>
+
+  <main class="doc-main">
+    <h1>接口文档</h1>
+
+    <h2 id="overview">接口概览</h2>
+    <p>所有接口均为 <code>POST</code> 方法，<code>Content-Type: application/json</code>。成功时 <code>respValue = 0</code>（GM_SUCCESS），失败返回对应错误码。</p>
+    <p>URL 路径和字段名与纽创信安 XC-M30W 签名验签服务器一致。</p>
+
+    <h2 id="format">请求/响应格式</h2>
+    <p><strong>通用响应结构</strong>：</p>
+    <pre><code>{
+  "respValue": 0,      <span class="cm">// 0=成功，非零=错误码</span>
+  ...                  <span class="cm">// 接口特有的返回字段</span>
+}</code></pre>
+    <p><strong>数据编码约定</strong>：</p>
+    <ul>
+      <li>二进制数据（明文、密文、签名值、摘要）：<strong>Base64</strong> 编码</li>
+      <li>证书：DER 格式的 <strong>Base64</strong> 编码</li>
+      <li>证书序列号（certSN）：<strong>十六进制</strong> 字符串</li>
+    </ul>
+
+    <!-- ===== 证书管理 ===== -->
+    <h2>证书管理</h2>
+
+    <div class="api-entry" id="export-cert">
+      <div class="api-sig">POST /ExportCert</div>
+      <p>按主题或序列号导出证书。</p>
+      <h3>请求</h3>
+      <pre><code>{
+  "certSubjectBase64": "...",  <span class="cm">// 证书主题 base64（二选一）</span>
+  "certSN": "01"               <span class="cm">// 证书序列号 hex（二选一）</span>
+}</code></pre>
+      <h3>响应</h3>
+      <pre><code>{
+  "respValue": 0,
+  "certBase64": "MIIB..."      <span class="cm">// DER 证书 base64</span>
+}</code></pre>
+    </div>
+
+    <div class="api-entry" id="validate-cert">
+      <div class="api-sig">POST /ValidateCert</div>
+      <p>验证证书有效性：有效期 + 信任锚签名。</p>
+      <h3>请求</h3>
+      <pre><code>{
+  "certBase64": "MIIB..."      <span class="cm">// 待验证证书 DER base64</span>
+}</code></pre>
+      <h3>响应</h3>
+      <pre><code>{
+  "respValue": 0               <span class="cm">// 0=有效，非零见错误码</span>
+}</code></pre>
+      <div class="callout callout-info">验证逻辑：检查 notBefore ≤ 当前时间 ≤ notAfter，并验证是否被信任根证书签发。不检查 CRL/OCSP。</div>
+    </div>
+
+    <div class="api-entry" id="parse-cert">
+      <div class="api-sig">POST /ParseCert</div>
+      <p>解析证书指定字段。</p>
+      <h3>请求</h3>
+      <pre><code>{
+  "certBase64": "MIIB...",
+  "infoType": 1                <span class="cm">// 字段类型（见下表）</span>
+}</code></pre>
+      <table>
+        <tr><th>infoType</th><th>返回内容</th></tr>
+        <tr><td>1</td><td>版本号 (version)</td></tr>
+        <tr><td>2</td><td>序列号 (serialNumber)</td></tr>
+        <tr><td>5</td><td>颁发者 (issuer DN)</td></tr>
+        <tr><td>6</td><td>有效期起始 (notBefore)</td></tr>
+        <tr><td>7</td><td>有效期截止 (notAfter)</td></tr>
+        <tr><td>8</td><td>使用者 (subject DN)</td></tr>
+        <tr><td>0x31</td><td>签名算法 OID</td></tr>
+        <tr><td>0x35</td><td>主题公钥 (hex)</td></tr>
+        <tr><td>0x36</td><td>主题公钥算法 OID</td></tr>
+      </table>
+    </div>
+
+    <!-- ===== 摘要运算 ===== -->
+    <h2>摘要运算</h2>
+
+    <div class="api-entry" id="digest">
+      <div class="api-sig">POST /Digest</div>
+      <p>SM3 摘要计算。支持传入公钥 + userId 进行 Z 值预计算（用于 SM2 签名前的预哈希）。</p>
+      <h3>请求</h3>
+      <pre><code>{
+  "inData": "aGVsbG8=",        <span class="cm">// 待计算数据 base64</span>
+  "publicKey": "...",          <span class="cm">// 可选：SM2 公钥 base64（用于 Z 值）</span>
+  "userId": "..."              <span class="cm">// 可选：用户标识 base64</span>
+}</code></pre>
+      <h3>响应</h3>
+      <pre><code>{
+  "respValue": 0,
+  "hashData": "..."            <span class="cm">// SM3 摘要 base64（32字节）</span>
+}</code></pre>
+    </div>
+
+    <!-- ===== 数字签名 ===== -->
+    <h2>数字签名</h2>
+
+    <div class="api-entry" id="sign-data">
+      <div class="api-sig">POST /SignData</div>
+      <p>使用服务端私钥进行 SM2 P1 签名（裸签名，DER 编码 r||s）。</p>
+      <h3>请求</h3>
+      <pre><code>{
+  "keyIndex": 1,               <span class="cm">// 私钥索引（对应 mock_certs.toml 中的 signing_keys）</span>
+  "password": "12345678",      <span class="cm">// 密钥 PIN</span>
+  "inData": "aGVsbG8="        <span class="cm">// 待签名数据 base64</span>
+}</code></pre>
+      <h3>响应</h3>
+      <pre><code>{
+  "respValue": 0,
+  "signData": "...",           <span class="cm">// DER 编码签名值 base64</span>
+  "certBase64": "MIIB..."     <span class="cm">// 签名证书 base64</span>
+}</code></pre>
+      <div class="callout callout-info">签名流程：先以默认 userId（<code>1234567812345678</code>）计算 Z 值，再 <code>e = SM3(Z || inData)</code>，最后 SM2 签名。</div>
+    </div>
+
+    <div class="api-entry" id="verify-signed-data">
+      <div class="api-sig">POST /VerifySignedData</div>
+      <p>使用证书公钥验证 SM2 P1 签名。</p>
+      <h3>请求</h3>
+      <pre><code>{
+  "certBase64": "MIIB...",     <span class="cm">// 签名证书</span>
+  "inData": "aGVsbG8=",       <span class="cm">// 原始数据</span>
+  "signData": "..."            <span class="cm">// 签名值 base64</span>
+}</code></pre>
+      <h3>响应</h3>
+      <pre><code>{
+  "respValue": 0               <span class="cm">// 0=验签成功</span>
+}</code></pre>
+    </div>
+
+    <div class="api-entry" id="sign-message">
+      <div class="api-sig">POST /SignMessage</div>
+      <p>生成 PKCS7/CMS SignedData 格式的签名消息（附带签名证书链）。</p>
+      <h3>请求</h3>
+      <pre><code>{
+  "keyIndex": 1,
+  "password": "12345678",
+  "inData": "aGVsbG8="
+}</code></pre>
+      <h3>响应</h3>
+      <pre><code>{
+  "respValue": 0,
+  "signedMessage": "..."       <span class="cm">// CMS SignedData DER base64</span>
+}</code></pre>
+    </div>
+
+    <div class="api-entry" id="verify-signed-message">
+      <div class="api-sig">POST /VerifySignedMessage</div>
+      <p>验证 PKCS7/CMS SignedData 签名消息。</p>
+      <h3>请求</h3>
+      <pre><code>{
+  "inData": "aGVsbG8=",
+  "signedMessage": "..."       <span class="cm">// CMS SignedData DER base64</span>
+}</code></pre>
+      <h3>响应</h3>
+      <pre><code>{
+  "respValue": 0               <span class="cm">// 0=验签成功</span>
+}</code></pre>
+    </div>
+
+    <!-- ===== 数字信封 ===== -->
+    <h2>数字信封</h2>
+
+    <div class="api-entry" id="envelope-enc">
+      <div class="api-sig">POST /envelopeEnc</div>
+      <p>SM2+SM4 数字信封加密：随机生成 SM4 会话密钥，SM4-CBC 加密数据，SM2 加密会话密钥。</p>
+      <h3>请求</h3>
+      <pre><code>{
+  "certBase64": "MIIB...",     <span class="cm">// 接收方加密证书</span>
+  "inData": "aGVsbG8="        <span class="cm">// 待加密数据 base64</span>
+}</code></pre>
+      <h3>响应</h3>
+      <pre><code>{
+  "respValue": 0,
+  "envelopedData": "..."       <span class="cm">// 数字信封 base64</span>
+}</code></pre>
+    </div>
+
+    <div class="api-entry" id="envelope-dec">
+      <div class="api-sig">POST /envelopeDec</div>
+      <p>SM2+SM4 数字信封解密：SM2 解密会话密钥，SM4-CBC 解密数据。</p>
+      <h3>请求</h3>
+      <pre><code>{
+  "keyIndex": 1,               <span class="cm">// 加密私钥索引</span>
+  "envelopedData": "..."       <span class="cm">// 数字信封 base64</span>
+}</code></pre>
+      <h3>响应</h3>
+      <pre><code>{
+  "respValue": 0,
+  "outData": "aGVsbG8="       <span class="cm">// 解密后数据 base64</span>
+}</code></pre>
+    </div>
+
+    <!-- ===== 错误码 ===== -->
+    <h2 id="error-codes">错误码列表</h2>
+    <table>
+      <thead>
+        <tr><th>值</th><th>常量</th><th>含义</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>0</code></td><td>GM_SUCCESS</td><td>成功</td></tr>
+        <tr><td><code>0x04000001</code></td><td>ERR_CERT_ID</td><td>无效证书标识</td></tr>
+        <tr><td><code>0x04000004</code></td><td>ERR_ALG_ID</td><td>签名算法类型错误</td></tr>
+        <tr><td><code>0x04000005</code></td><td>ERR_KEY_INDEX</td><td>私钥索引错误</td></tr>
+        <tr><td><code>0x04000006</code></td><td>ERR_KEY_AUTH</td><td>权限标识（PIN）错误</td></tr>
+        <tr><td><code>0x04000007</code></td><td>ERR_CERT_INVALID</td><td>证书无效或不存在</td></tr>
+        <tr><td><code>0x04000008</code></td><td>ERR_CERT_DECODE</td><td>证书解码错误</td></tr>
+        <tr><td><code>0x04000009</code></td><td>ERR_CERT_EXPIRED</td><td>证书已过期</td></tr>
+        <tr><td><code>0x0400000a</code></td><td>ERR_CERT_NOT_YET</td><td>证书尚未生效</td></tr>
+        <tr><td><code>0x0400000b</code></td><td>ERR_CERT_REVOKED</td><td>证书已撤销（保留）</td></tr>
+        <tr><td><code>0x0400000c</code></td><td>ERR_SIG_INVALID</td><td>签名无效</td></tr>
+        <tr><td><code>0x0400000d</code></td><td>ERR_DATA_FORMAT</td><td>数据格式错误</td></tr>
+        <tr><td><code>0x0400000e</code></td><td>ERR_INTERNAL</td><td>系统内部错误</td></tr>
+        <tr><td><code>0x0400000f</code></td><td>ERR_CRYPTO</td><td>密码运算错误</td></tr>
+        <tr><td><code>0x04000010</code></td><td>ERR_PARAM</td><td>输入参数错误</td></tr>
+      </tbody>
+    </table>
+
+  </main>
+</div>
+
+<footer class="footer">
+  <div class="container">
+    <p>SVS Mock · 基于 <a href="https://crates.io/crates/libsmx">libsmx</a> + <a href="https://crates.io/crates/axum">axum</a> · GM/T 0029-2014</p>
+  </div>
+</footer>
+
+</body>
+</html>
