@@ -86,4 +86,17 @@ impl CertStore {
         // 再按 serial hex 查找（统一转小写）
         self.serial_index.get(&cert_id.to_lowercase())
     }
+
+    /// 返回 subject_index 中所有证书的 DER bytes（用于 CMS 无附证时 fallback 查找）
+    pub fn all_cert_ders(&self) -> Vec<&Vec<u8>> {
+        self.subject_index.values().collect()
+    }
+
+    /// 按 certID（subject base64 或 SN hex）反查对应的加密密钥配置
+    pub fn find_enc_key_by_cert_id(&self, cert_id: &str) -> Option<&crate::config::EncKey> {
+        let target_der = self.find_cert(cert_id)?;
+        self.enc_keys.values().find(|k| {
+            B64.decode(&k.cert).ok().as_deref() == Some(target_der.as_slice())
+        })
+    }
 }

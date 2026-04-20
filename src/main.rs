@@ -1,6 +1,7 @@
 mod cert_store;
 mod config;
 mod error;
+mod proto;
 mod routes;
 mod service;
 

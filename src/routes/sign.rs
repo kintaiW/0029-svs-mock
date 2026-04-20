@@ -1,17 +1,15 @@
 /// SignData / SignMessage 路由
-use axum::{extract::State, routing::post, Json, Router};
+use axum::{extract::State, routing::post, Router};
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
-use der::Decode;
 use serde::Deserialize;
-use serde_json::Value;
 use std::sync::Arc;
-use x509_cert::Certificate;
 
 use crate::cert_store::CertStore;
 use crate::error::*;
+use crate::proto::{Payload, Reply};
 use crate::service::{cms_ops, crypto_ops};
 
-const SGD_SM3_SM2: u32 = 0x00020201; // 签名算法标识
+const SGD_SM3_SM2: u32 = 0x00020201;
 
 #[derive(Deserialize)]
 struct SignDataReq {
@@ -20,13 +18,14 @@ struct SignDataReq {
     /// PIN 码
     #[serde(rename = "keyValue")]
     key_value: String,
-    #[serde(rename = "algID", default)]
-    alg_id: Option<u32>,
+    /// 签名算法标识（允许缺省，默认为 SM3withSM2）
+    #[serde(rename = "signMethod", default)]
+    sign_method: Option<u32>,
     /// 待签名数据 base64
     #[serde(rename = "inData")]
     in_data: String,
     #[serde(rename = "inDataLen", default)]
-    _in_data_len: Option<u32>,
+    in_data_len: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -35,84 +34,100 @@ struct SignMessageReq {
     key_index: u32,
     #[serde(rename = "keyValue")]
     key_value: String,
-    /// 待签名原文 base64
     #[serde(rename = "inData")]
     in_data: String,
-    /// 是否包含原文（0=不包含，1=包含）
-    #[serde(rename = "signatureType", default)]
-    signature_type: u32,
-    /// 是否包含证书链（0=不包含，1=包含）
-    #[serde(rename = "certType", default)]
-    cert_type: u32,
+    #[serde(rename = "inDataLen", default)]
+    _in_data_len: Option<u32>,
+    #[serde(rename = "signMethod", default)]
+    _sign_method: Option<u32>,
+    /// originalText=TRUE 表示附原文（不分离），FALSE 表示分离签名
+    #[serde(rename = "originalText", default)]
+    original_text: Option<String>,
+    /// certificateChain=TRUE 表示附证书
+    #[serde(rename = "certificateChain", default)]
+    certificate_chain: Option<String>,
+    // 以下字段读后忽略
+    #[serde(rename = "hashFlag", default)]
+    _hash_flag: Option<String>,
+    #[serde(rename = "crl", default)]
+    _crl: Option<String>,
+    #[serde(rename = "authenticationAttributes", default)]
+    _auth_attrs: Option<String>,
 }
 
 async fn sign_data(
     State(store): State<Arc<CertStore>>,
-    Json(req): Json<SignDataReq>,
-) -> Json<Value> {
-    // 验证算法标识（允许缺省，默认为 SM2withSM3）
-    if let Some(alg) = req.alg_id {
+    Payload(req, wire): Payload<SignDataReq>,
+) -> Reply {
+    if let Some(alg) = req.sign_method {
         if alg != SGD_SM3_SM2 {
-            return Json(resp_err(ERR_ALG_ID));
+            return Reply(resp_err(ERR_ALG_ID), wire);
         }
     }
 
-    // 验证 keyIndex 和 PIN
     let key_cfg = match store.signing_keys.get(&req.key_index) {
         Some(k) => k,
-        None => return Json(resp_err(ERR_KEY_INDEX)),
+        None => return Reply(resp_err(ERR_KEY_INDEX), wire),
     };
     if key_cfg.pin != req.key_value {
-        return Json(resp_err(ERR_KEY_AUTH));
+        return Reply(resp_err(ERR_KEY_AUTH), wire);
     }
 
+    if req.in_data.is_empty() {
+        return Reply(resp_err(ERR_PARAM), wire);
+    }
     let data = match B64.decode(&req.in_data) {
         Ok(d) => d,
-        Err(_) => return Json(resp_err(ERR_PARAM)),
+        Err(_) => return Reply(resp_err(ERR_PARAM), wire),
     };
 
+    // Validate inDataLen when caller provides it (0 = not provided / skip check)
+    if let Some(len) = req.in_data_len {
+        if len > 0 && len as usize != data.len() {
+            return Reply(resp_err(ERR_PARAM), wire);
+        }
+    }
+
     match crypto_ops::sm2_sign(&key_cfg.private_key, &data) {
-        Ok(sig) => Json(resp_ok_with(serde_json::json!({
-            "signData": B64.encode(&sig)
-        }))),
-        Err(code) => Json(resp_err(code)),
+        Ok(sig) => Reply(resp_ok_with(serde_json::json!({
+            "signature": B64.encode(&sig)
+        })), wire),
+        Err(code) => Reply(resp_err(code), wire),
     }
 }
 
 async fn sign_message(
     State(store): State<Arc<CertStore>>,
-    Json(req): Json<SignMessageReq>,
-) -> Json<Value> {
-    // 验证 keyIndex 和 PIN
+    Payload(req, wire): Payload<SignMessageReq>,
+) -> Reply {
     let key_cfg = match store.signing_keys.get(&req.key_index) {
         Some(k) => k,
-        None => return Json(resp_err(ERR_KEY_INDEX)),
+        None => return Reply(resp_err(ERR_KEY_INDEX), wire),
     };
     if key_cfg.pin != req.key_value {
-        return Json(resp_err(ERR_KEY_AUTH));
+        return Reply(resp_err(ERR_KEY_AUTH), wire);
     }
 
     let data = match B64.decode(&req.in_data) {
         Ok(d) => d,
-        Err(_) => return Json(resp_err(ERR_PARAM)),
+        Err(_) => return Reply(resp_err(ERR_PARAM), wire),
     };
 
-    // 解码签名证书
     let cert_der = match B64.decode(&key_cfg.cert) {
         Ok(d) => d,
-        Err(_) => return Json(resp_err(ERR_CERT_DECODE)),
+        Err(_) => return Reply(resp_err(ERR_CERT_DECODE), wire),
     };
 
-    // signatureType=0 表示不附原文（detached），1 表示附原文
-    let detached = req.signature_type == 0;
-    // certType=1 表示附证书
-    let include_cert = req.cert_type == 1;
+    // originalText=TRUE → 附原文（非分离签名）；缺省/FALSE → 分离签名
+    let detached = req.original_text.as_deref() != Some("TRUE");
+    // certificateChain=TRUE → 附证书
+    let include_cert = req.certificate_chain.as_deref() == Some("TRUE");
 
     match cms_ops::sign_message(&key_cfg.private_key, &cert_der, &data, detached, include_cert) {
-        Ok(cms_der) => Json(resp_ok_with(serde_json::json!({
-            "signData": B64.encode(&cms_der)
-        }))),
-        Err(code) => Json(resp_err(code)),
+        Ok(cms_der) => Reply(resp_ok_with(serde_json::json!({
+            "signedMessage": B64.encode(&cms_der)
+        })), wire),
+        Err(code) => Reply(resp_err(code), wire),
     }
 }
 

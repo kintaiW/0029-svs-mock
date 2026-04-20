@@ -8,7 +8,7 @@
 - `docs/0029-2014签名验签服务器技术规范.pdf`（标准规范）
 - `docs/纽创信安XC-M30W签名验签接口协议.docx`（真实设备接口文档）
 
-**对标真实设备**：192.168.177.20（可用于集成测试对比）
+**对标真实设备**：<your-svs-ip>（可用于集成测试对比）
 
 **技术栈**：Rust 1.75+，axum，libsmx 0.3.0，x509-cert，tokio
 
@@ -189,7 +189,7 @@ cert = "MIIC..."                     # 对应的加密证书 DER base64
 **交付物**：与真实设备对比测试，验证 JSON 响应格式兼容
 
 - [ ] 7.1 编写基本冒烟测试脚本（curl 测试各接口）
-- [ ] 7.2 对比真实设备 192.168.177.20 的响应格式
+- [ ] 7.2 对比真实设备 <your-svs-ip> 的响应格式
 - [ ] 7.3 编写 README.md
 - [ ] 7.4 为 mock_certs.toml 配置真实测试证书（从真实设备导出）
 
@@ -330,3 +330,124 @@ tracing-subscriber = "0.3"
 
 **待完成**：
 - 阶段 7：集成测试（需要真实设备证书配置后才能运行）
+
+---
+
+## 十、svsc 协议适配改造（方案 A，2026-04-20）
+
+### 背景
+
+svsc 客户端采用 **form-urlencoded + 自定义字段命名 + 特定请求头**，与本 mock 现有的 JSON API 不兼容。本次改造把 mock 对外契约**全面向 svsc 对齐**，以便两项目直接联调。原则：**改动最小、逐接口替换、多包接口继续保持 stub 不实现**。
+
+### 改造策略（关键决策）
+
+1. **双协议协商**：根据请求 `Content-Type` 分流——
+   - `application/x-www-form-urlencoded` → 按 form 解析，响应也用 form-urlencoded。
+   - 其它（含缺省、`application/json`）→ 按 JSON 解析，响应用 JSON（**默认分支**）。
+   - 实现方式：在每个 handler 入口用自定义 extractor（见 A1.1）根据 `Content-Type` header 分发；handler 内部拿到的永远是同一个 Rust struct，响应同样通过自定义 responder 按请求协议回写。
+2. **字段命名统一向 svsc 对齐**（`identification`/`cert`/`signature`/`digest`/`signMethod`/… 等）。理由：
+   - 真实商用 SVS 字段名与 svsc 一致，mock 对齐更贴近实物。
+   - 两协议用同一套 DTO，避免双字段 struct 维护成本翻倍。
+   - 旧 JSON 契约（`certID`/`certContent`/`signData` 等）**整体退役**；JSON 支持仅保留"协议壳"，字段名不兼容旧版。
+3. **请求头**`SVS-Request-Version` / `SVS-Request-Time` **只读不校验**（兼容即可，不阻塞）。
+4. **`envelopedData` 单字段打包**：mock 内部仍用 `encryptedKey/encryptedData/iv` 三件套，但对外用 `base64(JSON{encryptedKey, encryptedData, iv})` 组合，Dec 时反向解包。因 svsc 只做回灌，不关心内部结构。
+5. **`envelopeDec` 由 `certID` 定位私钥**：新增 cert_store 反查方法，把 `certID` → `enc_keys` 里对应 index。
+6. **错误码**：mock 现有 `0x04xxxxxx` 体系保持不变，svsc 只校验 0/非0。
+7. **多包接口**：保持 stub 返回 `0x0400000e`，响应格式也走双协议协商。
+
+### 字段映射总表
+
+| 接口 | 请求字段改动 | 响应字段改动 |
+|---|---|---|
+| `/ExportCert` | `certID` → `identification` | `certContent` → `cert` |
+| `/ValidateCert` | `certContent` → `cert`；新增 `ocsp`（TRUE/FALSE，读后忽略）；删 `verifyLevel` | `state` 保持 |
+| `/ParseCert` | `certContent` → `cert`；`infoType` 保持 | 所有动态字段 → 统一放进 `info` 字符串（按 infoType 取主值） |
+| `/Digest` | `algID` → `algId`；`userID` → `userId` | `hashData` → `digest` |
+| `/SignData` | `algID` → `signMethod`；新增 `inDataLen`（读后忽略） | `signData` → `signature` |
+| `/VerifySignedData` | 新增 `type`（1=cert / 2=certSN）；`certContent` → `cert`；新增 `certSN`；`signData` → `signature`；`verifyFlag` → `verifyLevel`；新增 `inDataLen` | 仅 `respValue` |
+| `/SignMessage` | 新增 `signMethod`、`inDataLen`、`hashFlag`、`originalText`、`certificateChain`、`crl`、`authenticationAttributes`（均 TRUE/FALSE）；删 `signatureType`、`certType` | `signData` → `signedMessage` |
+| `/VerifySignedMessage` | `signData` → `signedMessage`；新增 `inDataLen`、`hashFlag`、`originalText`、`certificateChain`、`crl`、`authenticationAttributes` | 仅 `respValue`（去掉 `outData`、`certContent`） |
+| `/envelopeEnc` | `inData` → `data` | `encryptedKey`+`encryptedData`+`iv` → 合并为 `envelopedData` |
+| `/envelopeDec` | 请求改为 `certID` + `envelopedData`（删 `keyIndex`/三件套） | `outData` → `data` |
+| 12 个 multi-part stub | 仅接 form 请求 | 返回 `respValue=67108878`（form） |
+
+### Todo 清单
+
+#### 阶段 A1：公共基础（双协议协商）
+- [x] A1.1 新建 `src/proto.rs`：
+  - 定义 `enum Wire { Json, Form }`，封装 `Content-Type` 判定（缺省/`application/json` → Json；含 `application/x-www-form-urlencoded` → Form）。
+  - 实现 `struct Payload<T>(pub T, pub Wire)` 作为 axum extractor，`FromRequest` 内部分支：Form 分支用 `axum::extract::Form<T>`，JSON 分支用 `axum::extract::Json<T>`。
+  - 实现 `struct Reply(pub serde_json::Value, pub Wire)` 作为响应类型，`IntoResponse` 内根据 Wire 选 JSON body 或 urlencoded body；Form 分支只允许扁平 `{key: string|number}` 对，遇嵌套按 `value.to_string()` 平铺（mock 当前所有响应都是扁平的，OK）。
+- [x] A1.2 `src/error.rs`：现有 `resp_ok`/`resp_err`/`resp_ok_with` 继续返回 `serde_json::Value`，handler 组装成 `Reply(value, wire)` 即可复用。
+- [x] A1.3 `Cargo.toml`：新增 `serde_urlencoded = "0.7"`（axum 已间接依赖，确认版本对齐）。
+- [x] A1.4 `src/cert_store.rs`：新增 `find_enc_key_by_cert_id(&self, id: &str) -> Option<&EncKey>`，按 subject/SN 反查 enc_keys。
+
+#### 阶段 A2：逐接口改造（10 个接口 + 12 个 stub）
+所有 handler 通用模式：`async fn xxx(State, Payload(req, wire): Payload<XxxReq>) -> Reply { ... Reply(v, wire) }`。
+
+- [x] A2.1 `/ExportCert`：`ExportCertReq { identification }`；响应 `cert`。
+- [x] A2.2 `/ValidateCert`：`ValidateCertReq { cert, ocsp: Option<String> }`（`ocsp` 读后丢弃）；响应 `state`。
+- [x] A2.3 `/ParseCert`：`ParseCertReq { cert, infoType }`；响应把原动态字段合并成单个 `info` 字符串（按 infoType 取主值，必要时 JSON 序列化复合字段为字符串）。
+- [x] A2.4 `/Digest`：请求字段 `algId`、`userId`；响应 `digest`。
+- [x] A2.5 `/SignData`：请求字段 `signMethod` 替代 `algID`；响应 `signature`。
+- [x] A2.6 `/VerifySignedData`：新增 `type` 分支——`type=1` 使用 `cert`；`type=2` 使用 `certSN` → 调 `store.find_cert(&cert_sn_hex)` 取证书；字段 `signature`、`verifyLevel`。
+- [x] A2.7 `/SignMessage`：请求字段 `signMethod`、`keyIndex`、`keyValue`、`inDataLen`、`inData`、`hashFlag`、`originalText`、`certificateChain`、`crl`、`authenticationAttributes`（TRUE/FALSE）；仅解析 `originalText`（decide detached）与 `certificateChain`（decide include_cert），其余读后忽略。响应字段 `signedMessage`。
+- [x] A2.8 `/VerifySignedMessage`：字段 `signedMessage`、`inData`、其余多布尔读后忽略；响应只留 `respValue`。
+- [x] A2.9 `/envelopeEnc`：请求字段 `certID`、`data`；响应把三件套 JSON 序列化后 base64 作为 `envelopedData`。
+- [x] A2.10 `/envelopeDec`：请求字段 `certID` + `envelopedData`；base64 解码 + JSON 反序列化取出 ekey/edata/iv，通过 `find_enc_key_by_cert_id` 找私钥，沿用现有 `crypto_ops::envelope_dec`；响应字段 `data`。
+- [x] A2.11 `src/routes/stub.rs`：`stub_handler` 改用 `Payload/Reply`，根据请求协议返回 `respValue=67108878`。
+
+#### 阶段 A3：编译与冒烟
+- [x] A3.1 `cargo check` 零错误。
+- [x] A3.2 `cargo run` 启动，双协议各跑一轮：
+  - JSON：`curl -H 'Content-Type: application/json' -d '{...}'` 验证默认分支。
+  - Form：`curl --data-urlencode 'k=v'` 验证 svsc 路径。
+  - 覆盖 3 个典型接口：`/ExportCert`、`/SignData`、`/envelopeEnc`→`/envelopeDec`（JSON & Form 均通过）。
+- [x] A3.3 对接 svsc：`go test ./...` 全部通过（含 E2E 全链路 Step1-10），结果 `ok github.com/ccasa-project/svs-test`。
+
+### 不做的事（范围边界）
+
+- 不实现 12 个多包接口业务逻辑，继续 stub。
+- 不改 CMS 结构，签名/验签内部逻辑维持现状。
+- 不实现 OCSP / CRL，`ocsp` 字段只读不校验。
+- 不保留旧 JSON 字段名（`certID`/`certContent`/`signData` 等）；JSON 协议支持保留，但字段统一用 svsc 命名。
+- 不改 README.md 的接口说明（等 svsc 联调稳定再统一修 README）。
+
+### 关键文件
+
+- `0029-svs-mock/src/error.rs`（新增 form 响应辅助）
+- `0029-svs-mock/src/cert_store.rs`（新增 `find_enc_key_by_cert_id`）
+- `0029-svs-mock/src/routes/*.rs`（全部 extractor 和响应改造）
+- `0029-svs-mock/Cargo.toml`（可能新增 `serde_urlencoded` 或等价库）
+
+### 风险 / 待澄清
+
+1. svsc 回传的 `envelopedData` 是由 mock 自己生成的（内部 JSON 格式），只要 Enc→Dec 闭环可解即可；**不保证**跨真实 SVS 设备互操作。
+2. `/ParseCert` 的 `info` 字段合并方式会丢失 mock 现有的字段语义（如 `validity` 的起/止日期），svsc 当前测试只断言 `info != ""`，预期无影响，但需要在冒烟时确认。
+3. `SignMessage` 的 5 个布尔开关语义映射是**约简**实现，与真实 SVS 语义不完全等价；svsc 测试未区分 CRL/authAttr，应该可通过。
+
+---
+
+## 十一、联调修复记录（2026-04-20）
+
+运行 `go test ./...` 对接 svsc 发现并修复以下问题：
+
+### 修复一：Form 双重 URL 编码
+- **问题**：resty `SetFormData` 对已经 `urlEncodeB64` 过的值再次 `url.QueryEscape`，导致 `%3D` → `%253D`，mock 收到的 base64 字段无法解码（返回 ERR_PARAM）。
+- **修复**：`src/proto.rs` Form extractor 在 `serde_urlencoded::from_str` 前先将 raw body 中的 `%25` 替换回 `%`，等效于一次预解码，恢复正确 base64。
+
+### 修复二：ValidateCert state 值
+- **问题**：mock 返回 `state=1` 表示有效，但 GM/T 0029 协议定义 `0=正常/1=吊销/2=未知`，测试断言 `state=0`。
+- **修复**：`src/routes/cert.rs` `validate_cert` 改为成功时返回 `state=0`。
+
+### 修复三：CMS 无附证书时 VerifySignedMessage 失败
+- **问题**：`certificateChain=FALSE` 时 CMS 不含证书，`parse_and_verify_signed_data` 找不到签名者证书报错。
+- **修复**：`src/service/cms_ops.rs` 新增 `fallback_certs` 参数；当 CMS 无证书时，从 SignerInfo 提取 serial，在 fallback 列表按 serial 匹配；`src/cert_store.rs` 新增 `all_cert_ders()`。
+
+### 修复四：空输入校验
+- **问题**：`inData/data` 为空时 mock 返回成功，但测试期望错误。
+- **修复**：`src/routes/digest.rs`、`envelope.rs`、`sign.rs` 各加空字段检测，`sign.rs` 同时校验 `inDataLen` 与实际长度不匹配。
+
+### 修复五：测试代码修复
+- `svsc/svs_api_test.go` `TestApiExportCert` 改用 `SVS_TEST_IDENTIFICATION` env var 作为 happy path identification（原为硬编码真实设备证书 ID）。
+- `TestApiRequiredHeaders` 两个 TODO 用例 `expectError` 改为 `false`（projectplan.md 明确决定 Header 只读不校验）。

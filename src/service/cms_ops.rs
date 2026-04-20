@@ -37,9 +37,14 @@ pub fn sign_message(
 }
 
 /// 验证 CMS SignedData
-pub fn verify_signed_message(cms_der: &[u8]) -> Result<(Vec<u8>, Vec<u8>), u32> {
-    // 解析 CMS，提取签名者证书、原文、签名值
-    parse_and_verify_signed_data(cms_der).map_err(|_| ERR_SIG_INVALID)
+/// override_content：分离签名时（CMS 不含原文）由调用方传入原文；附原文时传 None
+/// fallback_certs：CMS 未附证书时从此列表按 serial 查找签名者证书
+pub fn verify_signed_message(
+    cms_der: &[u8],
+    override_content: Option<&[u8]>,
+    fallback_certs: &[&[u8]],
+) -> Result<(Vec<u8>, Vec<u8>), u32> {
+    parse_and_verify_signed_data(cms_der, override_content, fallback_certs).map_err(|_| ERR_SIG_INVALID)
 }
 
 // ──────────────────── 简化 CMS 构建 ────────────────────
@@ -134,8 +139,8 @@ fn build_signed_data(
 // ──────────────────── 简化 CMS 解析 ────────────────────
 
 /// 从 CMS SignedData DER 中提取（签名者公钥 DER, 原文字节, 签名者证书 DER）并验签
-/// 返回 (原文, 签名者证书 DER)
-fn parse_and_verify_signed_data(cms_der: &[u8]) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
+/// override_content：若 CMS 为分离签名（不含原文），则使用此值；否则用 CMS 内嵌原文
+fn parse_and_verify_signed_data(cms_der: &[u8], override_content: Option<&[u8]>, fallback_certs: &[&[u8]]) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
     // 简化解析：使用 der crate 的 Any/RawValue 遍历
     // Reason: 手工解析 TLV 比引入完整 CMS crate 更轻量
     use der::asn1::Any;
@@ -151,19 +156,25 @@ fn parse_and_verify_signed_data(cms_der: &[u8]) -> anyhow::Result<(Vec<u8>, Vec<
     let econtent_seq = sd.get(2).ok_or(anyhow::anyhow!("缺少 encapContentInfo"))?;
     let econtent_parts = der_parse_sequence(econtent_seq)?;
 
-    // 原文：econtent_parts[1] 是 [0] EXPLICIT OCTET STRING
-    let content = if econtent_parts.len() > 1 {
+    // 原文：econtent_parts[1] 是 [0] EXPLICIT OCTET STRING（附原文时存在）
+    let cms_content = if econtent_parts.len() > 1 {
         let wrapped = &econtent_parts[1];
         let inner = der_unwrap_explicit(wrapped)?;
-        // inner 是 OCTET STRING TLV
         der_parse_octet_string(&inner)?
     } else {
         vec![]
+    };
+    // 分离签名时 cms_content 为空，使用调用方传入的原文
+    let content = if cms_content.is_empty() {
+        override_content.unwrap_or(&[]).to_vec()
+    } else {
+        cms_content
     };
 
     // 找到 signerInfos（最后一个 SET）和 certificates
     let mut signer_cert_der = vec![];
     let mut sig_bytes = vec![];
+    let mut signer_serial = vec![];  // 用于 fallback 查找
 
     // 遍历 sd 字段找 certificates [0] 和 signerInfos SET
     for i in 3..sd.len() {
@@ -178,8 +189,37 @@ fn parse_and_verify_signed_data(cms_der: &[u8]) -> anyhow::Result<(Vec<u8>, Vec<
             let si = si_set.first().ok_or(anyhow::anyhow!("空 signerInfos"))?;
             let si_parts = der_parse_sequence(si)?;
             // si_parts: [version, issuerAndSerial, digestAlg, sigAlg, signature]
+            // 提取 serial 以便在 fallback_certs 中查找
+            if si_parts.len() >= 2 {
+                let issuer_and_serial_parts = der_parse_sequence(&si_parts[1]).unwrap_or_default();
+                if issuer_and_serial_parts.len() >= 2 {
+                    // serial INTEGER：去掉 tag+len+可选前置0
+                    let serial_tlv = &issuer_and_serial_parts[1];
+                    if serial_tlv.first() == Some(&0x02) {
+                        let (serial_bytes, _) = der_read_tlv_content(serial_tlv).unwrap_or((&[], 0));
+                        // strip optional leading 0x00 padding
+                        signer_serial = serial_bytes.iter().copied()
+                            .skip_while(|&b| b == 0x00)
+                            .collect();
+                    }
+                }
+            }
             let sig_raw = si_parts.last().ok_or(anyhow::anyhow!("缺少签名"))?;
             sig_bytes = der_parse_octet_string(sig_raw)?;
+        }
+    }
+
+    // Reason: CMS 可能不附证书（certificateChain=FALSE），此时从 fallback_certs 按 serial 查找
+    if signer_cert_der.is_empty() && !signer_serial.is_empty() {
+        for cert_der in fallback_certs {
+            if let Ok(c) = Certificate::from_der(cert_der) {
+                let sn = c.tbs_certificate.serial_number.as_bytes();
+                let sn_stripped: Vec<u8> = sn.iter().copied().skip_while(|&b| b == 0).collect();
+                if sn_stripped == signer_serial {
+                    signer_cert_der = cert_der.to_vec();
+                    break;
+                }
+            }
         }
     }
 

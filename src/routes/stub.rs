@@ -1,12 +1,12 @@
 /// 多包接口 stub（12个）
 /// 全部返回 ERR_INTERNAL(0x0400000e = 67108878)，表示不支持多包模式
-use axum::{routing::post, Json, Router};
-use serde_json::Value;
-use crate::error::resp_err;
-use crate::error::ERR_INTERNAL;
+use axum::{extract::Request, routing::post, Router};
 
-async fn stub_handler() -> Json<Value> {
-    Json(resp_err(ERR_INTERNAL))
+use crate::error::{resp_err, ERR_INTERNAL};
+use crate::proto::{Reply, Wire};
+
+async fn stub_handler(req: Request) -> Reply {
+    Reply(resp_err(ERR_INTERNAL), Wire::detect(req.headers()))
 }
 
 pub fn router() -> Router {
