@@ -12,11 +12,11 @@ permissions:
 jobs:
   build-linux:
     # Reason: ubuntu-20.04 runner 已被 GitHub 于 2025-04-15 下线，无法排上队列；
-    # host 改用 ubuntu-22.04，真正编译落在 ubuntu:20.04 容器内以保留 glibc 2.31 兼容面
+    # ubuntu:20.04 容器镜像也无法拉取，改用 ubuntu:22.04 容器
     # （CentOS 7/8、Debian 11+、Ubuntu 20.04+ 均可使用产出的可执行文件）
     runs-on: ubuntu-22.04
     container:
-      image: ubuntu:20.04
+      image: ubuntu:22.04
       options: --user root
 
     steps:
@@ -135,6 +135,6 @@ jobs:
 
             ### ⚠️ 注意事项
 
-            - 构建环境：Ubuntu 20.04 容器（glibc 2.31+）
+            - 构建环境：Ubuntu 22.04 容器（glibc 2.31+）
             - 配置文件 `mock_certs.toml` 必须在工作目录下或通过 `SVS_MOCK_CONFIG` 指定
             - 仅供开发测试，示例密钥和证书严禁用于生产环境
