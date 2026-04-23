@@ -12,7 +12,7 @@ permissions:
 jobs:
   build-linux:
     # Reason: ubuntu-20.04 runner 已被 GitHub 于 2025-04-15 下线，无法排上队列；
-    # ubuntu:20.04 容器镜像也无法拉取，改用 ubuntu:22.04 容器
+    # host 改用 ubuntu-22.04，真正编译落在 ubuntu:20.04 容器内以保留 glibc 2.31 兼容面
     # （CentOS 7/8、Debian 11+、Ubuntu 20.04+ 均可使用产出的可执行文件）
     runs-on: ubuntu-22.04
     container:
@@ -30,6 +30,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Sync Cargo.toml version with tag
+        # Reason: env!("CARGO_PKG_VERSION") 在编译期读取 Cargo.toml，必须在 build 前回写
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          python3 -c "
+import re
+v = '${VERSION}'
+with open('Cargo.toml', 'r') as f:
+    content = f.read()
+content = re.sub(r'^version = \"[0-9][^\"]*\"', f'version = \"{v}\"', content, count=1, flags=re.MULTILINE)
+with open('Cargo.toml', 'w') as f:
+    f.write(content)
+print(f'Cargo.toml version set to {v}')
+"
+          grep "^version" Cargo.toml
+
       - name: Install Rust toolchain
         # Reason: container 内无 rustup；dtolnay/rust-toolchain action 依赖 host 工具链，在容器内不可用
         run: |
@@ -39,6 +56,15 @@ jobs:
 
       - name: Build release binary
         run: cargo build --release
+
+      - name: Assert runtime version matches tag
+        # Reason: 确认 --version 输出与 tag 一致，捕获 Cargo.toml 回写失效的情况
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          ./target/release/svs-mock --version | grep -F "${VERSION}" \
+            || { echo "❌ tag=${VERSION} 但 svs-mock --version 不匹配"; exit 1; }
+          echo "✅ 版本一致：svs-mock ${VERSION}"
 
       - name: Smoke test — binary starts and responds
         run: |
