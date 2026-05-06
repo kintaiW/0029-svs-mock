@@ -451,3 +451,57 @@ svsc 客户端采用 **form-urlencoded + 自定义字段命名 + 特定请求头
 ### 修复五：测试代码修复
 - `svsc/svs_api_test.go` `TestApiExportCert` 改用 `SVS_TEST_IDENTIFICATION` env var 作为 happy path identification（原为硬编码真实设备证书 ID）。
 - `TestApiRequiredHeaders` 两个 TODO 用例 `expectError` 改为 `false`（projectplan.md 明确决定 Header 只读不校验）。
+
+---
+
+## 十二、MCP Server 集成（gm-agent-stack 战略，2026-04-22）
+
+### 背景
+
+将 svs-mock 纳入 `gm-agent-stack` 开源战略，作为三大国密 MCP Server 之一，使 Claude / Cursor 等 LLM 可直接通过 MCP 协议调用 SVS 能力。
+
+### 改动清单
+
+- [x] `Cargo.toml` 新增 `rmcp 1.x`（`server + transport-streamable-http-server`）、`clap 4`、`tokio-util`
+- [x] 新建 `src/mcp/mod.rs`：`build_mcp_service()` 封装 Streamable HTTP 服务，挂载到 `/mcp`
+- [x] 新建 `src/mcp/server.rs`：`SvsMcpServer`，6 个 MCP tool：
+  - `svs_digest`：SM3 摘要（含 Z 值前缀）
+  - `svs_sign`：SM2 签名（data/message 两种模式）
+  - `svs_verify`：SM2 验签（data/message 两种模式）
+  - `svs_envelope_enc`：数字信封加密
+  - `svs_envelope_dec`：数字信封解密
+  - `svs_cert`：证书操作（export/validate/parse）
+- [x] `src/cert_store.rs` 新增 `#[derive(Debug)]`（rmcp 宏需要）
+- [x] `src/main.rs` 改造：新增 `--mode rest|mcp|both`（默认 both），双模共用业务层
+
+### 启动方式
+
+```bash
+# REST + MCP 双模（默认）
+svs-mock --mode both
+
+# 仅 MCP
+svs-mock --mode mcp
+
+# 仅 REST（保持旧行为）
+svs-mock --mode rest
+```
+
+### MCP 端点
+
+```
+POST http://localhost:9000/mcp
+Accept: application/json, text/event-stream
+Content-Type: application/json
+
+# Claude Code 添加
+claude mcp add svs-mock --url http://localhost:9000/mcp
+```
+
+### 验证（2026-04-22 已通过）
+
+- `initialize` → 返回正确 serverInfo + instructions ✓
+- `tools/list` → 返回 6 个 tool + 完整 JSON Schema ✓
+- `svs_digest("48656c6c6f20576f726c64")` → SM3 hash hex 正确 ✓
+- SM2 P1 签名 + CMS 验签闭环 `valid:true` ✓
+- 数字信封加密 + 解密闭环，明文还原正确 ✓

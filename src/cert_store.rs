@@ -5,6 +5,7 @@ use std::collections::HashMap;
 
 /// 内存证书/密钥仓库
 /// 初始化时从 AppConfig 加载，运行时只读
+#[derive(Debug)]
 pub struct CertStore {
     /// 可信根证书列表（DER bytes）
     pub trusted_roots: Vec<Vec<u8>>,
